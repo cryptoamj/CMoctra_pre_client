@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-
-import json, base64, hashlib, time, sys, re, os, shutil, asyncio, aiohttp, threading, random
+import json, base64, hashlib, time, sys, re, os, shutil, asyncio, aiohttp, threading
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import nacl.signing
@@ -23,35 +22,6 @@ executor = ThreadPoolExecutor(max_workers=1)
 stop_flag = threading.Event()
 spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 spinner_idx = 0
-
-# Automation configuration
-automation_config = {
-    "auto_claim": True,
-    "balance_rebalancing": True,
-    "target_public_ratio": 0.4,
-    "transaction_monitoring": True,
-    "daily_wallet_sends": True,
-    "daily_send_count": 10,
-    "min_amount": 0.01,
-    "max_amount": 1.5,
-    "min_delay": 45,
-    "max_delay": 75,
-    "response_delay_min": 30,
-    "response_delay_max": 45
-}
-
-scheduled_txs = []
-last_daily_send = None
-
-class ScheduledTransaction:
-    def __init__(self, to_addr, amount, interval_minutes, message=None, tx_type='public'):
-        self.to_addr = to_addr
-        self.amount = amount
-        self.interval = timedelta(minutes=interval_minutes)
-        self.message = message
-        self.tx_type = tx_type
-        self.last_sent = None
-        self.next_send = datetime.now() + self.interval
 
 def cls():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -97,44 +67,8 @@ async def awaitkey():
     except:
         stop_flag.set()
 
-def load_wallets():
-    """Load wallet addresses from wallets.txt"""
-    try:
-        if not os.path.exists("wallets.txt"):
-            # Create example file
-            with open("wallets.txt", 'w') as f:
-                f.write("# Add wallet addresses here, one per line\n")
-                f.write("# Lines starting with # are comments\n")
-                f.write("# oct...\n")
-            return []
-        
-        wallets = []
-        with open("wallets.txt", 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and b58.match(line):
-                    wallets.append(line)
-        return wallets
-    except Exception as e:
-        print(f"Error loading wallets.txt: {e}")
-        return []
-
-def save_config():
-    """Save automation configuration"""
-    config = {
-        "priv": priv,
-        "addr": addr,
-        "rpc": rpc,
-        "automation": automation_config
-    }
-    try:
-        with open("wallet.json", 'w') as f:
-            json.dump(config, f, indent=2)
-    except Exception as e:
-        print(f"Error saving config: {e}")
-
 def ld():
-    global priv, addr, rpc, sk, pub, automation_config
+    global priv, addr, rpc, sk, pub
     try:
         wallet_path = os.path.expanduser("~/.octra/wallet.json")
         if not os.path.exists(wallet_path):
@@ -147,17 +81,13 @@ def ld():
         addr = d.get('addr')
         rpc = d.get('rpc', 'http://localhost:8080')
         
-        # Load automation config if available
-        if 'automation' in d:
-            automation_config.update(d['automation'])
-        
         if not priv or not addr:
             return False
-        
+            
         if not rpc.startswith('https://') and 'localhost' not in rpc:
-            print(f"{c['R']}⚠️ WARNING: Using insecure HTTP connection!{c['r']}")
+            print(f"{c['R']}⚠️  WARNING: Using insecure HTTP connection!{c['r']}")
             time.sleep(2)
-        
+            
         sk = nacl.signing.SigningKey(base64.b64decode(priv))
         pub = base64.b64encode(sk.verify_key.encode()).decode()
         return True
@@ -237,6 +167,7 @@ def decrypt_client_balance(encrypted_data, privkey_b64):
     try:
         b64_data = encrypted_data[3:]
         raw = base64.b64decode(b64_data)
+        
         if len(raw) < 28:
             return 0
         
@@ -245,6 +176,7 @@ def decrypt_client_balance(encrypted_data, privkey_b64):
         
         key = derive_encryption_key(privkey_b64)
         aesgcm = AESGCM(key)
+        
         plaintext = aesgcm.decrypt(nonce, ciphertext, None)
         return int(plaintext.decode())
     except:
@@ -293,19 +225,21 @@ async def req(m, p, d=None, t=10):
             connector=connector,
             json_serialize=json.dumps
         )
-    
     try:
         url = f"{rpc}{p}"
+        
         kwargs = {}
         if m == 'POST' and d:
             kwargs['json'] = d
         
         async with getattr(session, m.lower())(url, **kwargs) as resp:
             text = await resp.text()
+            
             try:
                 j = json.loads(text) if text.strip() else None
             except:
                 j = None
+            
             return resp.status, text, j
     except asyncio.TimeoutError:
         return 0, "timeout", None
@@ -316,12 +250,14 @@ async def req_private(path, method='GET', data=None):
     headers = {"X-Private-Key": priv}
     try:
         url = f"{rpc}{path}"
+        
         kwargs = {'headers': headers}
         if method == 'POST' and data:
             kwargs['json'] = data
-        
+            
         async with getattr(session, method.lower())(url, **kwargs) as resp:
             text = await resp.text()
+            
             if resp.status == 200:
                 try:
                     return True, json.loads(text) if text.strip() else {}
@@ -329,6 +265,7 @@ async def req_private(path, method='GET', data=None):
                     return False, {"error": "Invalid JSON response"}
             else:
                 return False, {"error": f"HTTP {resp.status}"}
+                
     except Exception as e:
         return False, {"error": str(e)}
 
@@ -351,12 +288,10 @@ async def st():
         cn = int(j.get('nonce', 0))
         cb = float(j.get('balance', 0))
         lu = now
-        
         if s2 == 200 and j2:
             our = [tx for tx in j2.get('staged_transactions', []) if tx.get('from') == addr]
             if our:
                 cn = max(cn, max(int(tx.get('nonce', 0)) for tx in our))
-    
     elif s == 404:
         cn, cb, lu = 0, 0.0, now
     elif s == 200 and t and not j:
@@ -370,11 +305,11 @@ async def st():
                 cn, cb = None, None
         except:
             cn, cb = None, None
-    
     return cn, cb
 
 async def get_encrypted_balance():
     ok, result = await req_private(f"/view_encrypted_balance/{addr}")
+    
     if ok:
         try:
             return {
@@ -396,6 +331,7 @@ async def encrypt_balance(amount):
     
     current_encrypted_raw = enc_data['encrypted_raw']
     new_encrypted_raw = current_encrypted_raw + int(amount * μ)
+    
     encrypted_value = encrypt_client_balance(new_encrypted_raw, priv)
     
     data = {
@@ -421,6 +357,7 @@ async def decrypt_balance(amount):
         return False, {"error": "insufficient encrypted balance"}
     
     new_encrypted_raw = current_encrypted_raw - int(amount * μ)
+    
     encrypted_value = encrypt_client_balance(new_encrypted_raw, priv)
     
     data = {
@@ -473,6 +410,7 @@ async def create_private_transfer(to_addr, amount):
 
 async def get_pending_transfers():
     ok, result = await req_private(f"/pending_private_transfers?address={addr}")
+    
     if ok:
         transfers = result.get("pending_transfers", [])
         return transfers
@@ -497,7 +435,6 @@ async def gh():
     now = time.time()
     if now - lh < 60 and h:
         return
-    
     s, t, j = await req('GET', f'/address/{addr}?limit=20')
     if s != 200 or (not j and not t):
         return
@@ -512,7 +449,6 @@ async def gh():
         for i, (ref, result) in enumerate(zip(j.get('recent_transactions', []), tx_results)):
             if isinstance(result, Exception):
                 continue
-            
             s2, _, j2 = result
             if s2 == 200 and j2 and 'parsed_tx' in j2:
                 p = j2['parsed_tx']
@@ -524,7 +460,6 @@ async def gh():
                 ii = p.get('to') == addr
                 ar = p.get('amount_raw', p.get('amount', '0'))
                 a = float(ar) if '.' in str(ar) else int(ar) / μ
-                
                 msg = None
                 if 'data' in j2:
                     try:
@@ -532,7 +467,6 @@ async def gh():
                         msg = data.get('message')
                     except:
                         pass
-                
                 nh.append({
                     'time': datetime.fromtimestamp(p.get('timestamp', 0)),
                     'hash': tx_hash,
@@ -548,7 +482,6 @@ async def gh():
         oh = datetime.now() - timedelta(hours=1)
         h[:] = sorted(nh + [tx for tx in h if tx.get('time', datetime.now()) > oh], key=lambda x: x['time'], reverse=True)[:50]
         lh = now
-    
     elif s == 404 or (s == 200 and t and 'no transactions' in t.lower()):
         h.clear()
         lh = now
@@ -562,285 +495,34 @@ def mk(to, a, n, msg=None):
         "ou": "1" if a < 1000 else "3",
         "timestamp": time.time()
     }
-    
     if msg:
         tx["message"] = msg
-    
     bl = json.dumps({k: v for k, v in tx.items() if k != "message"}, separators=(",", ":"))
     sig = base64.b64encode(sk.sign(bl.encode()).signature).decode()
     tx.update(signature=sig, public_key=pub)
-    
     return tx, hashlib.sha256(bl.encode()).hexdigest()
 
 async def snd(tx):
     t0 = time.time()
     s, t, j = await req('POST', '/send-tx', tx)
     dt = time.time() - t0
-    
     if s == 200:
         if j and j.get('status') == 'accepted':
             return True, j.get('tx_hash', ''), dt, j
         elif t.lower().startswith('ok'):
             return True, t.split()[-1], dt, None
-    
     return False, json.dumps(j) if j else t, dt, j
-
-# AUTOMATION FUNCTIONS
-
-async def auto_claim_daemon():
-    """Background task to automatically claim pending private transfers"""
-    while not stop_flag.is_set():
-        try:
-            if not automation_config.get("auto_claim", False):
-                await asyncio.sleep(60)
-                continue
-            
-            transfers = await get_pending_transfers()
-            for transfer in transfers:
-                transfer_id = transfer['id']
-                ok, result = await claim_private_transfer(transfer_id)
-                if ok:
-                    print(f"\n{c['g']}Auto-claimed transfer #{transfer_id}: {result.get('amount', 'unknown')}{c['r']}")
-                else:
-                    print(f"\n{c['R']}Failed to claim #{transfer_id}: {result.get('error', 'unknown')}{c['r']}")
-                await asyncio.sleep(1)
-            
-            await asyncio.sleep(30)
-        except Exception as e:
-            print(f"\n{c['R']}Auto-claim error: {e}{c['r']}")
-            await asyncio.sleep(60)
-
-async def scheduled_tx_daemon():
-    """Background task for scheduled transactions"""
-    while not stop_flag.is_set():
-        try:
-            now = datetime.now()
-            
-            for sched_tx in scheduled_txs[:]:
-                if now >= sched_tx.next_send:
-                    try:
-                        if sched_tx.tx_type == 'private':
-                            ok, result = await create_private_transfer(sched_tx.to_addr, sched_tx.amount)
-                        else:
-                            n, b = await st()
-                            if b and b >= sched_tx.amount:
-                                tx, _ = mk(sched_tx.to_addr, sched_tx.amount, n + 1, sched_tx.message)
-                                ok, _, _, _ = await snd(tx)
-                            else:
-                                ok = False
-                        
-                        if ok:
-                            sched_tx.last_sent = now
-                            sched_tx.next_send = now + sched_tx.interval
-                            print(f"\n{c['g']}Scheduled payment sent: {sched_tx.amount} to {sched_tx.to_addr}{c['r']}")
-                        else:
-                            print(f"\n{c['R']}Scheduled payment failed: {sched_tx.to_addr}{c['r']}")
-                            
-                    except Exception as e:
-                        print(f"\n{c['R']}Scheduled transaction error: {e}{c['r']}")
-            
-            await asyncio.sleep(60)
-        except Exception as e:
-            print(f"\n{c['R']}Scheduled daemon error: {e}{c['r']}")
-            await asyncio.sleep(60)
-
-async def balance_rebalancing_daemon():
-    """Automatically rebalance between public and encrypted balances"""
-    while not stop_flag.is_set():
-        try:
-            if not automation_config.get("balance_rebalancing", False):
-                await asyncio.sleep(300)
-                continue
-            
-            enc_data = await get_encrypted_balance()
-            if not enc_data:
-                await asyncio.sleep(300)
-                continue
-            
-            total = enc_data['total']
-            public = enc_data['public']
-            encrypted = enc_data['encrypted']
-            
-            if total > 10:
-                target_public = total * automation_config.get("target_public_ratio", 0.3)
-                difference = public - target_public
-                
-                if abs(difference) > 1:
-                    if difference > 0:
-                        amount_to_encrypt = min(difference * 0.8, public - 2)
-                        if amount_to_encrypt > 0:
-                            ok, result = await encrypt_balance(amount_to_encrypt)
-                            if ok:
-                                print(f"\n{c['y']}Auto-encrypted {amount_to_encrypt:.6f} OCT{c['r']}")
-                    
-                    elif difference < 0:
-                        amount_to_decrypt = min(abs(difference) * 0.8, encrypted)
-                        if amount_to_decrypt > 0:
-                            ok, result = await decrypt_balance(amount_to_decrypt)
-                            if ok:
-                                print(f"\n{c['y']}Auto-decrypted {amount_to_decrypt:.6f} OCT{c['r']}")
-            
-            await asyncio.sleep(600)
-            
-        except Exception as e:
-            print(f"\n{c['R']}Rebalancing error: {e}{c['r']}")
-            await asyncio.sleep(600)
-
-async def transaction_monitor_daemon():
-    """Monitor incoming transactions and auto-respond with same amount and method"""
-    last_check_time = datetime.now()
-    
-    while not stop_flag.is_set():
-        try:
-            if not automation_config.get("transaction_monitoring", False):
-                await asyncio.sleep(60)
-                continue
-            
-            await gh()
-            
-            new_incoming = []
-            for tx in h:
-                if (tx['type'] == 'in' and 
-                    tx.get('time', datetime.now()) > last_check_time and
-                    tx.get('ok', False)):
-                    new_incoming.append(tx)
-            
-            for tx in new_incoming:
-                sender = tx.get('to')
-                amount = tx.get('amt', 0)
-                
-                if sender and amount > 0:
-                    # Add delay before responding (25-35 seconds)
-                    delay = random.randint(
-                        automation_config.get("response_delay_min", 25),
-                        automation_config.get("response_delay_max", 35)
-                    )
-                    print(f"\n{c['c']}Received {amount:.6f} OCT from {sender[:20]}... waiting {delay}s before response{c['r']}")
-                    await asyncio.sleep(delay)
-                    
-                    transfers = await get_pending_transfers()
-                    is_private_source = any(t.get('sender') == sender for t in transfers)
-                    
-                    try:
-                        if is_private_source:
-                            ok, result = await create_private_transfer(sender, amount)
-                            method = "private"
-                        else:
-                            n, b = await st()
-                            if b and b >= amount:
-                                response_tx, _ = mk(sender, amount, n + 1, f"Auto-response to {tx['hash'][:8]}")
-                                ok, _, _, _ = await snd(response_tx)
-                                method = "public"
-                            else:
-                                ok = False
-                                method = "public (insufficient balance)"
-                        
-                        if ok:
-                            print(f"\n{c['g']}Auto-responded {amount:.6f} OCT to {sender} via {method}{c['r']}")
-                        else:
-                            print(f"\n{c['R']}Failed to auto-respond to {sender}{c['r']}")
-                            
-                    except Exception as e:
-                        print(f"\n{c['R']}Auto-response error for {sender}: {e}{c['r']}")
-            
-            last_check_time = datetime.now()
-            await asyncio.sleep(30)
-            
-        except Exception as e:
-            print(f"\n{c['R']}Transaction monitoring error: {e}{c['r']}")
-            await asyncio.sleep(60)
-
-async def daily_wallet_sends_daemon():
-    """Send random amounts to random wallets from wallets.txt daily"""
-    global last_daily_send
-    
-    while not stop_flag.is_set():
-        try:
-            if not automation_config.get("daily_wallet_sends", False):
-                await asyncio.sleep(3600)
-                continue
-            
-            now = datetime.now()
-            
-            # Check if we need to send today
-            if last_daily_send is None or now.date() > last_daily_send.date():
-                wallets = load_wallets()
-                if not wallets:
-                    print(f"\n{c['y']}No wallets found in wallets.txt{c['r']}")
-                    await asyncio.sleep(3600)
-                    continue
-                
-                # Select random wallets
-                send_count = min(automation_config.get("daily_send_count", 10), len(wallets))
-                selected_wallets = random.sample(wallets, send_count)
-                
-                print(f"\n{c['g']}Starting daily sends to {send_count} wallets...{c['r']}")
-                
-                for i, wallet in enumerate(selected_wallets):
-                    try:
-                        # Generate random amount
-                        min_amt = automation_config.get("min_amount", 0.01)
-                        max_amt = automation_config.get("max_amount", 1.5)
-                        amount = round(random.uniform(min_amt, max_amt), 6)
-                        
-                        # Check balance
-                        n, b = await st()
-                        if not b or b < amount + 0.01:
-                            print(f"\n{c['R']}Insufficient balance for daily send #{i+1}{c['r']}")
-                            break
-                        
-                        # Send transaction
-                        tx, _ = mk(wallet, amount, n + 1, f"Daily automated send #{i+1}")
-                        ok, hash_result, _, _ = await snd(tx)
-                        
-                        if ok:
-                            print(f"\n{c['g']}Daily send #{i+1}: {amount:.6f} OCT to {wallet[:20]}... ✓{c['r']}")
-                        else:
-                            print(f"\n{c['R']}Daily send #{i+1} failed: {hash_result}{c['r']}")
-                        
-                        # Random delay between sends
-                        if i < len(selected_wallets) - 1:
-                            min_delay = automation_config.get("min_delay", 45)
-                            max_delay = automation_config.get("max_delay", 75)
-                            delay = random.randint(min_delay, max_delay)
-                            print(f"\n{c['c']}Waiting {delay}s before next send...{c['r']}")
-                            await asyncio.sleep(delay)
-                    
-                    except Exception as e:
-                        print(f"\n{c['R']}Error in daily send #{i+1}: {e}{c['r']}")
-                
-                last_daily_send = now
-                print(f"\n{c['g']}Daily wallet sends completed!{c['r']}")
-            
-            await asyncio.sleep(3600)
-            
-        except Exception as e:
-            print(f"\n{c['R']}Daily sends daemon error: {e}{c['r']}")
-            await asyncio.sleep(3600)
-
-def add_scheduled_transaction(to_addr, amount, interval_minutes, message=None, tx_type='public'):
-    """Add a new scheduled transaction"""
-    sched_tx = ScheduledTransaction(to_addr, amount, interval_minutes, message, tx_type)
-    scheduled_txs.append(sched_tx)
-    return len(scheduled_txs) - 1
-
-# UI FUNCTIONS
 
 async def expl(x, y, w, hb):
     box(x, y, w, hb, "wallet explorer")
-    
     n, b = await st()
     await gh()
-    
     at(x + 2, y + 2, "address:", c['c'])
     at(x + 11, y + 2, addr, c['w'])
-    
     at(x + 2, y + 3, "balance:", c['c'])
     at(x + 11, y + 3, f"{b:.6f} oct" if b is not None else "---", c['B'] + c['g'] if b else c['w'])
-    
-    at(x + 2, y + 4, "nonce: ", c['c'])
+    at(x + 2, y + 4, "nonce:  ", c['c'])
     at(x + 11, y + 4, str(n) if n is not None else "---", c['w'])
-    
     at(x + 2, y + 5, "public: ", c['c'])
     at(x + 11, y + 5, pub[:40] + "...", c['w'])
     
@@ -849,76 +531,50 @@ async def expl(x, y, w, hb):
         if enc_data:
             at(x + 2, y + 6, "encrypted:", c['c'])
             at(x + 13, y + 6, f"{enc_data['encrypted']:.6f} oct", c['B'] + c['y'])
-        
-        pending = await get_pending_transfers()
-        if pending:
-            at(x + 2, y + 7, "claimable:", c['c'])
-            at(x + 13, y + 7, f"{len(pending)} transfers", c['B'] + c['g'])
+            
+            pending = await get_pending_transfers()
+            if pending:
+                at(x + 2, y + 7, "claimable:", c['c'])
+                at(x + 13, y + 7, f"{len(pending)} transfers", c['B'] + c['g'])
     except:
         pass
     
     _, _, j = await req('GET', '/staging', 2)
     sc = len([tx for tx in j.get('staged_transactions', []) if tx.get('from') == addr]) if j else 0
-    
     at(x + 2, y + 8, "staging:", c['c'])
     at(x + 11, y + 8, f"{sc} pending" if sc else "none", c['y'] if sc else c['w'])
+    at(x + 1, y + 9, "─" * (w - 2), c['w'])
     
-    # Show automation status
-    automation_status = []
-    if automation_config.get("auto_claim", False):
-        automation_status.append("claim")
-    if automation_config.get("balance_rebalancing", False):
-        automation_status.append("rebal")
-    if automation_config.get("transaction_monitoring", False):
-        automation_status.append("monitor")
-    if automation_config.get("daily_wallet_sends", False):
-        automation_status.append("daily")
-    
-    if automation_status:
-        at(x + 2, y + 9, "automation:", c['c'])
-        at(x + 14, y + 9, " | ".join(automation_status), c['g'])
-    
-    at(x + 1, y + 10, "─" * (w - 2), c['w'])
-    at(x + 2, y + 11, "recent transactions:", c['B'] + c['c'])
-    
+    at(x + 2, y + 10, "recent transactions:", c['B'] + c['c'])
     if not h:
-        at(x + 2, y + 13, "no transactions yet", c['y'])
+        at(x + 2, y + 12, "no transactions yet", c['y'])
     else:
-        at(x + 2, y + 13, "time type amount address", c['c'])
-        at(x + 2, y + 14, "─" * (w - 4), c['w'])
-        
+        at(x + 2, y + 12, "time     type  amount      address", c['c'])
+        at(x + 2, y + 13, "─" * (w - 4), c['w'])
         seen_hashes = set()
         display_count = 0
         sorted_h = sorted(h, key=lambda x: x['time'], reverse=True)
-        
         for tx in sorted_h:
             if tx['hash'] in seen_hashes:
                 continue
             seen_hashes.add(tx['hash'])
-            
-            if display_count >= min(len(h), hb - 18):
+            if display_count >= min(len(h), hb - 17):
                 break
-            
             is_pending = not tx.get('epoch')
             time_color = c['y'] if is_pending else c['w']
-            
-            at(x + 2, y + 15 + display_count, tx['time'].strftime('%H:%M:%S'), time_color)
-            at(x + 11, y + 15 + display_count, " in" if tx['type'] == 'in' else "out", c['g'] if tx['type'] == 'in' else c['R'])
-            at(x + 16, y + 15 + display_count, f"{float(tx['amt']):>10.6f}", c['w'])
-            at(x + 28, y + 15 + display_count, str(tx.get('to', '---')), c['y'])
-            
+            at(x + 2, y + 14 + display_count, tx['time'].strftime('%H:%M:%S'), time_color)
+            at(x + 11, y + 14 + display_count, " in" if tx['type'] == 'in' else "out", c['g'] if tx['type'] == 'in' else c['R'])
+            at(x + 16, y + 14 + display_count, f"{float(tx['amt']):>10.6f}", c['w'])
+            at(x + 28, y + 14 + display_count, str(tx.get('to', '---')), c['y'])
             if tx.get('msg'):
-                at(x + 77, y + 15 + display_count, "msg", c['c'])
-            
+                at(x + 77, y + 14 + display_count, "msg", c['c'])
             status_text = "pen" if is_pending else f"e{tx.get('epoch', 0)}"
             status_color = c['y'] + c['B'] if is_pending else c['c']
-            at(x + w - 6, y + 15 + display_count, status_text, status_color)
-            
+            at(x + w - 6, y + 14 + display_count, status_text, status_color)
             display_count += 1
 
 def menu(x, y, w, h):
     box(x, y, w, h, "commands")
-    
     at(x + 2, y + 2, "[1] send tx", c['w'])
     at(x + 2, y + 3, "[2] refresh", c['w'])
     at(x + 2, y + 4, "[3] multi send", c['w'])
@@ -928,345 +584,28 @@ def menu(x, y, w, h):
     at(x + 2, y + 8, "[7] claim transfers", c['w'])
     at(x + 2, y + 9, "[8] export keys", c['w'])
     at(x + 2, y + 10, "[9] clear hist", c['w'])
-    at(x + 2, y + 11, "[r] random send", c['w'])
-    at(x + 2, y + 12, "[a] automation", c['w'])
-    at(x + 2, y + 13, "[s] schedule tx", c['w'])
-    at(x + 2, y + 14, "[0] exit", c['w'])
-    
+    at(x + 2, y + 11, "[0] exit", c['w'])
     at(x + 2, y + h - 2, "command: ", c['B'] + c['y'])
-
-async def random_send_ui():
-    """New UI for random wallet sends"""
-    cr = sz()
-    cls()
-    fill()
-    
-    w, hb = 70, 20
-    x = (cr[0] - w) // 2
-    y = (cr[1] - hb) // 2
-    
-    box(x, y, w, hb, "random wallet send")
-    
-    # Load available wallets
-    wallets = load_wallets()
-    if not wallets:
-        at(x + 2, y + 10, "No wallets found in wallets.txt!", c['R'])
-        at(x + 2, y + 11, "Please add wallet addresses first.", c['y'])
-        await awaitkey()
-        return
-    
-    at(x + 2, y + 2, f"Available wallets: {len(wallets)}", c['g'])
-    at(x + 2, y + 3, "─" * (w - 4), c['w'])
-    
-    # Check current balance
-    n, b = await st()
-    at(x + 2, y + 5, f"Current balance: {b:.6f} OCT", c['c'])
-    
-    at(x + 2, y + 7, "Number of wallets to send to:", c['y'])
-    count_input = await ainp(x + 2, y + 8)
-    
-    if not count_input or not count_input.isdigit():
-        at(x + 2, y + 12, "Invalid number!", c['R'])
-        await awaitkey()
-        return
-    
-    send_count = int(count_input)
-    if send_count <= 0 or send_count > len(wallets):
-        at(x + 2, y + 12, f"Please enter 1-{len(wallets)}", c['R'])
-        await awaitkey()
-        return
-    
-    at(x + 2, y + 10, f"Will send to {send_count} random wallets", c['g'])
-    
-    # Amount range
-    min_amt = automation_config.get("min_amount", 0.01)
-    max_amt = automation_config.get("max_amount", 1.5)
-    estimated_total = send_count * max_amt
-    
-    at(x + 2, y + 11, f"Amount range: {min_amt:.2f} - {max_amt:.2f} OCT", c['c'])
-    at(x + 2, y + 12, f"Estimated max total: {estimated_total:.2f} OCT", c['y'])
-    
-    if b < estimated_total:
-        at(x + 2, y + 14, "Warning: May not have enough balance!", c['R'])
-    
-    at(x + 2, y + 16, "Proceed? [y/n]:", c['B'] + c['y'])
-    confirm = await ainp(x + 18, y + 16)
-    
-    if confirm.lower() != 'y':
-        return
-    
-    # Perform random sends
-    selected_wallets = random.sample(wallets, send_count)
-    
-    cls()
-    fill()
-    box(x, y, w, hb, f"sending to {send_count} wallets")
-    
-    success_count = 0
-    for i, wallet in enumerate(selected_wallets):
-        try:
-            # Generate random amount
-            amount = round(random.uniform(min_amt, max_amt), 6)
-            
-            # Check balance
-            n, b = await st()
-            if not b or b < amount + 0.01:
-                at(x + 2, y + 5 + i, f"#{i+1}: Insufficient balance", c['R'])
-                break
-            
-            # Send transaction
-            spin_task = asyncio.create_task(spin_animation(x + 2, y + 5 + i, f"#{i+1}: Sending {amount:.6f} to {wallet[:20]}..."))
-            
-            tx, _ = mk(wallet, amount, n + 1, f"Random send #{i+1}")
-            ok, hash_result, _, _ = await snd(tx)
-            
-            spin_task.cancel()
-            try:
-                await spin_task
-            except asyncio.CancelledError:
-                pass
-            
-            if ok:
-                at(x + 2, y + 5 + i, f"#{i+1}: ✓ {amount:.6f} OCT to {wallet[:20]}...", c['g'])
-                success_count += 1
-            else:
-                at(x + 2, y + 5 + i, f"#{i+1}: ✗ Failed", c['R'])
-            
-            # Random delay between sends
-            if i < len(selected_wallets) - 1:
-                delay = random.randint(45, 75)
-                for j in range(delay):
-                    at(x + 2, y + 6 + i, f"Wait {delay-j}s...", c['c'])
-                    await asyncio.sleep(1)
-                at(x + 2, y + 6 + i, " " * 20, c['bg'])
-        
-        except Exception as e:
-            at(x + 2, y + 5 + i, f"#{i+1}: Error - {str(e)[:30]}", c['R'])
-    
-    at(x + 2, y + 17, f"Completed: {success_count}/{send_count} successful", c['B'] + c['g'] if success_count == send_count else c['B'] + c['y'])
-    await awaitkey()
-
-async def automation_settings_ui():
-    """Enhanced automation settings with easy management"""
-    cr = sz()
-    cls()
-    fill()
-    
-    w, hb = 75, 25
-    x = (cr[0] - w) // 2
-    y = (cr[1] - hb) // 2
-    
-    box(x, y, w, hb, "automation management")
-    
-    at(x + 2, y + 2, "┌─ AUTOMATION STATUS ─┐", c['B'] + c['c'])
-    
-    settings = [
-        ("auto_claim", "Auto-claim private transfers", 4),
-        ("balance_rebalancing", "Balance rebalancing", 5),
-        ("transaction_monitoring", "Transaction monitoring & auto-response", 6),
-        ("daily_wallet_sends", "Daily wallet sends", 7)
-    ]
-    
-    for key, desc, line in settings:
-        status = "ON" if automation_config.get(key, False) else "OFF"
-        color = c['g'] if automation_config.get(key, False) else c['R']
-        
-        at(x + 3, y + line, f"[{line-3}] {desc}", c['w'])
-        at(x + 50, y + line, status, c['B'] + color)
-    
-    at(x + 2, y + 9, "┌─ SETTINGS ─┐", c['B'] + c['c'])
-    
-    # Current settings display
-    wallets = load_wallets()
-    at(x + 3, y + 11, f"Response delay: {automation_config.get('response_delay_min', 25)}-{automation_config.get('response_delay_max', 35)}s", c['c'])
-    at(x + 3, y + 12, f"Daily sends: {automation_config.get('daily_send_count', 10)} wallets", c['c'])
-    at(x + 3, y + 13, f"Amount range: {automation_config.get('min_amount', 0.01):.2f} - {automation_config.get('max_amount', 1.5):.2f} OCT", c['c'])
-    at(x + 3, y + 14, f"Send delays: {automation_config.get('min_delay', 45)}-{automation_config.get('max_delay', 75)}s", c['c'])
-    at(x + 3, y + 15, f"Loaded wallets: {len(wallets)}", c['g'] if wallets else c['R'])
-    
-    at(x + 2, y + 17, "┌─ ACTIONS ─┐", c['B'] + c['c'])
-    at(x + 3, y + 19, "[1-4] Toggle automation features", c['y'])
-    at(x + 3, y + 20, "[5] Configure response delays", c['y'])
-    at(x + 3, y + 21, "[6] Configure amounts & timing", c['y'])
-    at(x + 3, y + 22, "[0] Back to main menu", c['y'])
-    
-    at(x + 2, y + 23, "Choice:", c['B'] + c['y'])
-    choice = await ainp(x + 10, y + 23)
-    
-    if choice in ['1', '2', '3', '4']:
-        idx = int(choice) - 1
-        key = settings[idx][0]
-        automation_config[key] = not automation_config.get(key, False)
-        save_config()
-        await automation_settings_ui()  # Refresh the UI
-    elif choice == '5':
-        await configure_response_delays()
-    elif choice == '6':
-        await configure_amounts_timing()
-
-async def configure_response_delays():
-    """Configure response delays"""
-    cr = sz()
-    cls()
-    fill()
-    
-    w, hb = 60, 15
-    x = (cr[0] - w) // 2
-    y = (cr[1] - hb) // 2
-    
-    box(x, y, w, hb, "configure response delays")
-    
-    current_min = automation_config.get("response_delay_min", 25)
-    current_max = automation_config.get("response_delay_max", 35)
-    
-    at(x + 2, y + 2, f"Current delay range: {current_min}-{current_max} seconds", c['c'])
-    at(x + 2, y + 3, "This delay happens before auto-responding to transactions", c['y'])
-    
-    at(x + 2, y + 5, "New minimum delay (seconds):", c['y'])
-    min_input = await ainp(x + 2, y + 6)
-    
-    at(x + 2, y + 8, "New maximum delay (seconds):", c['y'])
-    max_input = await ainp(x + 2, y + 9)
-    
-    try:
-        new_min = int(min_input) if min_input else current_min
-        new_max = int(max_input) if max_input else current_max
-        
-        if new_min >= new_max or new_min < 1 or new_max > 300:
-            at(x + 2, y + 11, "Invalid range! Min must be < Max, range 1-300s", c['R'])
-        else:
-            automation_config["response_delay_min"] = new_min
-            automation_config["response_delay_max"] = new_max
-            save_config()
-            at(x + 2, y + 11, f"✓ Updated to {new_min}-{new_max} seconds", c['g'])
-    except ValueError:
-        at(x + 2, y + 11, "Please enter valid numbers", c['R'])
-    
-    await awaitkey()
-
-async def configure_amounts_timing():
-    """Configure send amounts and timing"""
-    cr = sz()
-    cls()
-    fill()
-    
-    w, hb = 65, 20
-    x = (cr[0] - w) // 2
-    y = (cr[1] - hb) // 2
-    
-    box(x, y, w, hb, "configure amounts & timing")
-    
-    at(x + 2, y + 2, "Current settings:", c['c'])
-    at(x + 2, y + 3, f"Amount range: {automation_config.get('min_amount', 0.01):.2f} - {automation_config.get('max_amount', 1.5):.2f} OCT", c['w'])
-    at(x + 2, y + 4, f"Send delays: {automation_config.get('min_delay', 45)}-{automation_config.get('max_delay', 75)}s", c['w'])
-    at(x + 2, y + 5, f"Daily count: {automation_config.get('daily_send_count', 10)} wallets", c['w'])
-    
-    at(x + 2, y + 7, "New minimum send amount (OCT):", c['y'])
-    min_amt = await ainp(x + 2, y + 8)
-    
-    at(x + 2, y + 10, "New maximum send amount (OCT):", c['y'])
-    max_amt = await ainp(x + 2, y + 11)
-    
-    at(x + 2, y + 13, "Daily send count:", c['y'])
-    daily_count = await ainp(x + 2, y + 14)
-    
-    try:
-        if min_amt:
-            new_min_amt = float(min_amt)
-            if 0 < new_min_amt < 100:
-                automation_config["min_amount"] = new_min_amt
-        
-        if max_amt:
-            new_max_amt = float(max_amt)
-            if 0 < new_max_amt < 100 and new_max_amt > automation_config.get("min_amount", 0.01):
-                automation_config["max_amount"] = new_max_amt
-        
-        if daily_count:
-            new_daily = int(daily_count)
-            if 1 <= new_daily <= 100:
-                automation_config["daily_send_count"] = new_daily
-        
-        save_config()
-        at(x + 2, y + 16, "✓ Settings updated successfully", c['g'])
-        
-    except ValueError:
-        at(x + 2, y + 16, "Please enter valid numbers", c['R'])
-    
-    await awaitkey()
-
-async def add_scheduled_tx_ui():
-    cr = sz()
-    cls()
-    fill()
-    
-    w, hb = 70, 18
-    x = (cr[0] - w) // 2
-    y = (cr[1] - hb) // 2
-    
-    box(x, y, w, hb, "add scheduled transaction")
-    
-    at(x + 2, y + 2, "recipient address:", c['y'])
-    to_addr = await ainp(x + 2, y + 3)
-    
-    if not to_addr or not b58.match(to_addr):
-        at(x + 2, y + 10, "invalid address", c['R'])
-        await awaitkey()
-        return
-    
-    at(x + 2, y + 5, "amount (OCT):", c['y'])
-    amount_str = await ainp(x + 2, y + 6)
-    
-    try:
-        amount = float(amount_str)
-        if amount <= 0:
-            raise ValueError()
-    except:
-        at(x + 2, y + 10, "invalid amount", c['R'])
-        await awaitkey()
-        return
-    
-    at(x + 2, y + 8, "interval (minutes):", c['y'])
-    interval_str = await ainp(x + 2, y + 9)
-    
-    try:
-        interval = int(interval_str)
-        if interval <= 0:
-            raise ValueError()
-    except:
-        at(x + 2, y + 10, "invalid interval", c['R'])
-        await awaitkey()
-        return
-    
-    at(x + 2, y + 11, "transaction type [p]ublic or pri[v]ate:", c['y'])
-    tx_type_input = await ainp(x + 2, y + 12)
-    tx_type = 'private' if tx_type_input.lower().startswith('v') else 'public'
-    
-    idx = add_scheduled_transaction(to_addr, amount, interval, None, tx_type)
-    
-    at(x + 2, y + 14, f"✓ scheduled transaction added (#{idx})", c['g'])
-    at(x + 2, y + 15, f"will send {amount} OCT every {interval}min via {tx_type}", c['c'])
-    await awaitkey()
 
 async def scr():
     cr = sz()
     cls()
     fill()
-    
-    t = f" octra client v0.2.0 (automated) │ {datetime.now().strftime('%H:%M:%S')} "
+    t = f" octra client v0.1.0 (private) │ {datetime.now().strftime('%H:%M:%S')} "
     at((cr[0] - len(t)) // 2, 1, t, c['B'] + c['w'])
     
     sidebar_w = 28
-    menu(2, 3, sidebar_w, 18)
+    menu(2, 3, sidebar_w, 15)
     
-    info_y = 22
-    box(2, info_y, sidebar_w, 10)
+    info_y = 19
+    box(2, info_y, sidebar_w, 11)
     at(4, info_y + 2, "testnet environment.", c['y'])
     at(4, info_y + 3, "actively updated.", c['y'])
     at(4, info_y + 4, "monitor changes!", c['y'])
     at(4, info_y + 5, "", c['y'])
-    at(4, info_y + 6, "automation enabled", c['g'])
-    at(4, info_y + 7, "private transactions", c['g'])
-    at(4, info_y + 8, "enabled", c['g'])
+    at(4, info_y + 6, "private transactions", c['g'])
+    at(4, info_y + 7, "enabled", c['g'])
+    at(4, info_y + 8, "", c['y'])
     at(4, info_y + 9, "tokens: no value", c['R'])
     
     explorer_x = sidebar_w + 4
@@ -1274,55 +613,42 @@ async def scr():
     await expl(explorer_x, 3, explorer_w, cr[1] - 6)
     
     at(2, cr[1] - 1, " " * (cr[0] - 4), c['bg'])
-    at(2, cr[1] - 1, "ready (automated)", c['bgg'] + c['w'])
-    
-    return await ainp(12, 19)
+    at(2, cr[1] - 1, "ready", c['bgg'] + c['w'])
+    return await ainp(12, 16)
 
 async def tx():
     cr = sz()
     cls()
     fill()
-    
     w, hb = 85, 26
     x = (cr[0] - w) // 2
     y = (cr[1] - hb) // 2
-    
     box(x, y, w, hb, "send transaction")
-    
     at(x + 2, y + 2, "to address: (or [esc] to cancel)", c['y'])
     at(x + 2, y + 3, "─" * (w - 4), c['w'])
-    
     to = await ainp(x + 2, y + 4)
     if not to or to.lower() == 'esc':
         return
-    
     if not b58.match(to):
         at(x + 2, y + 14, "invalid address!", c['bgr'] + c['w'])
         at(x + 2, y + 15, "press enter to go back...", c['y'])
         await ainp(x + 2, y + 16)
         return
-    
     at(x + 2, y + 5, f"to: {to}", c['g'])
-    
     at(x + 2, y + 7, "amount: (or [esc] to cancel)", c['y'])
     at(x + 2, y + 8, "─" * (w - 4), c['w'])
-    
     a = await ainp(x + 2, y + 9)
     if not a or a.lower() == 'esc':
         return
-    
     if not re.match(r"^\d+(\.\d+)?$", a) or float(a) <= 0:
         at(x + 2, y + 14, "invalid amount!", c['bgr'] + c['w'])
         at(x + 2, y + 15, "press enter to go back...", c['y'])
         await ainp(x + 2, y + 16)
         return
-    
     a = float(a)
     at(x + 2, y + 10, f"amount: {a:.6f} oct", c['g'])
-    
     at(x + 2, y + 12, "message (optional, max 1024): (or enter to skip)", c['y'])
     at(x + 2, y + 13, "─" * (w - 4), c['w'])
-    
     msg = await ainp(x + 2, y + 14)
     if not msg:
         msg = None
@@ -1333,29 +659,23 @@ async def tx():
     global lu
     lu = 0
     n, b = await st()
-    
     if n is None:
         at(x + 2, y + 17, "failed to get nonce!", c['bgr'] + c['w'])
         at(x + 2, y + 18, "press enter to go back...", c['y'])
         await ainp(x + 2, y + 19)
         return
-    
     if not b or b < a:
         at(x + 2, y + 17, f"insufficient balance ({b:.6f} < {a})", c['bgr'] + c['w'])
         at(x + 2, y + 18, "press enter to go back...", c['y'])
         await ainp(x + 2, y + 19)
         return
-    
     at(x + 2, y + 16, "─" * (w - 4), c['w'])
     at(x + 2, y + 17, f"send {a:.6f} oct", c['B'] + c['g'])
-    at(x + 2, y + 18, f"to: {to}", c['g'])
-    
+    at(x + 2, y + 18, f"to:  {to}", c['g'])
     if msg:
         at(x + 2, y + 19, f"msg: {msg[:50]}{'...' if len(msg) > 50 else ''}", c['c'])
-    
     at(x + 2, y + 20, f"fee: {'0.001' if a < 1000 else '0.003'} oct (nonce: {n + 1})", c['y'])
     at(x + 2, y + 21, "[y]es / [n]o: ", c['B'] + c['y'])
-    
     if (await ainp(x + 16, y + 21)).strip().lower() != 'y':
         return
     
@@ -1373,15 +693,12 @@ async def tx():
     if ok:
         for i in range(17, 25):
             at(x + 2, y + i, " " * (w - 4), c['bg'])
-        
         at(x + 2, y + 20, f"✓ transaction accepted!", c['bgg'] + c['w'])
         at(x + 2, y + 21, f"hash: {hs[:64]}...", c['g'])
-        at(x + 2, y + 22, f" {hs[64:]}", c['g'])
+        at(x + 2, y + 22, f"      {hs[64:]}", c['g'])
         at(x + 2, y + 23, f"time: {dt:.2f}s", c['w'])
-        
         if r and 'pool_info' in r:
             at(x + 2, y + 24, f"pool: {r['pool_info'].get('total_pool_size', 0)} txs pending", c['y'])
-        
         h.append({
             'time': datetime.now(),
             'hash': hs,
@@ -1391,43 +708,33 @@ async def tx():
             'ok': True,
             'msg': msg
         })
-        
         lu = 0
     else:
         at(x + 2, y + 20, f"✗ transaction failed!", c['bgr'] + c['w'])
         at(x + 2, y + 21, f"error: {str(hs)[:w - 10]}", c['R'])
-    
     await awaitkey()
 
 async def multi():
     cr = sz()
     cls()
     fill()
-    
     w, hb = 70, cr[1] - 4
     x = (cr[0] - w) // 2
     y = 2
-    
     box(x, y, w, hb, "multi send")
-    
     at(x + 2, y + 2, "enter recipients (address amount), empty line to finish:", c['y'])
     at(x + 2, y + 3, "type [esc] to cancel", c['c'])
     at(x + 2, y + 4, "─" * (w - 4), c['w'])
-    
     rcp = []
     tot = 0
     ly = y + 5
-    
     while ly < y + hb - 8:
         at(x + 2, ly, f"[{len(rcp) + 1}] ", c['c'])
         l = await ainp(x + 7, ly)
-        
         if l.lower() == 'esc':
             return
-        
         if not l:
             break
-        
         p = l.split()
         if len(p) == 2 and b58.match(p[0]) and re.match(r"^\d+(\.\d+)?$", p[1]) and float(p[1]) > 0:
             a = float(p[1])
@@ -1437,29 +744,23 @@ async def multi():
             ly += 1
         else:
             at(x + 50, ly, "invalid!", c['R'])
-    
     if not rcp:
         return
-    
     at(x + 2, y + hb - 7, "─" * (w - 4), c['w'])
     at(x + 2, y + hb - 6, f"total: {tot:.6f} oct to {len(rcp)} addresses", c['B'] + c['y'])
-    
     global lu
     lu = 0
     n, b = await st()
-    
     if n is None:
         at(x + 2, y + hb - 5, "failed to get nonce!", c['bgr'] + c['w'])
         at(x + 2, y + hb - 4, "press enter to go back...", c['y'])
         await ainp(x + 2, y + hb - 3)
         return
-    
     if not b or b < tot:
         at(x + 2, y + hb - 5, f"insufficient balance! ({b:.6f} < {tot})", c['bgr'] + c['w'])
         at(x + 2, y + hb - 4, "press enter to go back...", c['y'])
         await ainp(x + 2, y + hb - 3)
         return
-    
     at(x + 2, y + hb - 5, f"send all? [y/n] (starting nonce: {n + 1}): ", c['y'])
     if (await ainp(x + 48, y + hb - 5)).strip().lower() != 'y':
         return
@@ -1489,7 +790,7 @@ async def multi():
                 ok, hs, _, _ = result
                 if ok:
                     s_total += 1
-                    at(x + 55, y + hb - 2, "✓ ok ", c['g'])
+                    at(x + 55, y + hb - 2, "✓ ok   ", c['g'])
                     h.append({
                         'time': datetime.now(),
                         'hash': hs,
@@ -1501,7 +802,6 @@ async def multi():
                 else:
                     f_total += 1
                     at(x + 55, y + hb - 2, "✗ fail ", c['R'])
-            
             at(x + 2, y + hb - 2, f"[{idx + 1}/{len(rcp)}] {a:.6f} to {to[:20]}...", c['c'])
             await asyncio.sleep(0.05)
     
@@ -1514,14 +814,12 @@ async def multi():
     lu = 0
     at(x + 2, y + hb - 2, " " * 65, c['bg'])
     at(x + 2, y + hb - 2, f"completed: {s_total} success, {f_total} failed", c['bgg'] + c['w'] if f_total == 0 else c['bgr'] + c['w'])
-    
     await awaitkey()
 
 async def encrypt_balance_ui():
     cr = sz()
     cls()
     fill()
-    
     w, hb = 70, 20
     x = (cr[0] - w) // 2
     y = (cr[1] - hb) // 2
@@ -1538,8 +836,10 @@ async def encrypt_balance_ui():
     
     at(x + 2, y + 2, "public balance:", c['c'])
     at(x + 20, y + 2, f"{pub_bal:.6f} oct", c['w'])
+    
     at(x + 2, y + 3, "encrypted:", c['c'])
     at(x + 20, y + 3, f"{enc_data['encrypted']:.6f} oct", c['y'])
+    
     at(x + 2, y + 4, "total:", c['c'])
     at(x + 20, y + 4, f"{enc_data['total']:.6f} oct", c['g'])
     
@@ -1592,7 +892,6 @@ async def decrypt_balance_ui():
     cr = sz()
     cls()
     fill()
-    
     w, hb = 70, 20
     x = (cr[0] - w) // 2
     y = (cr[1] - hb) // 2
@@ -1609,8 +908,10 @@ async def decrypt_balance_ui():
     
     at(x + 2, y + 2, "public balance:", c['c'])
     at(x + 20, y + 2, f"{pub_bal:.6f} oct", c['w'])
+    
     at(x + 2, y + 3, "encrypted:", c['c'])
     at(x + 20, y + 3, f"{enc_data['encrypted']:.6f} oct", c['y'])
+    
     at(x + 2, y + 4, "total:", c['c'])
     at(x + 20, y + 4, f"{enc_data['total']:.6f} oct", c['g'])
     
@@ -1663,7 +964,6 @@ async def private_transfer_ui():
     cr = sz()
     cls()
     fill()
-    
     w, hb = 80, 25
     x = (cr[0] - w) // 2
     y = (cr[1] - hb) // 2
@@ -1723,8 +1023,7 @@ async def private_transfer_ui():
         return
     
     amount = float(amount)
-    
-    if amount > enc_data['encrypted']:
+    if amount > enc_data['encrypted'] :
         at(x + 2, y + 14, f"insufficient encrypted balance", c['R'])
         await awaitkey()
         return
@@ -1732,8 +1031,8 @@ async def private_transfer_ui():
     at(x + 2, y + 12, "─" * (w - 4), c['w'])
     at(x + 2, y + 13, f"send {amount:.6f} oct privately to", c['B'])
     at(x + 2, y + 14, to_addr, c['y'])
-    
     at(x + 2, y + 16, "[y]es / [n]o:", c['B'] + c['y'])
+    
     if (await ainp(x + 15, y + 16)).strip().lower() != 'y':
         return
     
@@ -1761,7 +1060,6 @@ async def claim_transfers_ui():
     cr = sz()
     cls()
     fill()
-    
     w, hb = 85, cr[1] - 4
     x = (cr[0] - w) // 2
     y = 2
@@ -1784,8 +1082,7 @@ async def claim_transfers_ui():
         return
     
     at(x + 2, y + 2, f"found {len(transfers)} claimable transfers:", c['B'] + c['g'])
-    
-    at(x + 2, y + 4, "# FROM AMOUNT EPOCH ID", c['c'])
+    at(x + 2, y + 4, "#   FROM                AMOUNT         EPOCH   ID", c['c'])
     at(x + 2, y + 5, "─" * (w - 4), c['w'])
     
     display_y = y + 6
@@ -1816,7 +1113,6 @@ async def claim_transfers_ui():
     
     at(x + 2, y + hb - 6, "─" * (w - 4), c['w'])
     at(x + 2, y + hb - 5, "enter number to claim (0 to cancel):", c['y'])
-    
     choice = await ainp(x + 40, y + hb - 5)
     
     if not choice or choice == '0':
@@ -1857,18 +1153,14 @@ async def exp():
     cr = sz()
     cls()
     fill()
-    
     w, hb = 70, 15
     x = (cr[0] - w) // 2
     y = (cr[1] - hb) // 2
-    
     box(x, y, w, hb, "export keys")
     
     at(x + 2, y + 2, "current wallet info:", c['c'])
-    
     at(x + 2, y + 4, "address:", c['c'])
     at(x + 11, y + 4, addr[:32] + "...", c['w'])
-    
     at(x + 2, y + 5, "balance:", c['c'])
     n, b = await st()
     at(x + 11, y + 5, f"{b:.6f} oct" if b is not None else "---", c['g'])
@@ -1878,11 +1170,11 @@ async def exp():
     at(x + 2, y + 9, "[2] save full wallet to file", c['w'])
     at(x + 2, y + 10, "[3] copy address to clipboard", c['w'])
     at(x + 2, y + 11, "[0] cancel", c['w'])
-    
     at(x + 2, y + 13, "choice: ", c['B'] + c['y'])
-    choice = await ainp(x + 10, y + 13)
     
+    choice = await ainp(x + 10, y + 13)
     choice = choice.strip()
+    
     if choice == '1':
         at(x + 2, y + 7, " " * (w - 4), c['bg'])
         at(x + 2, y + 8, " " * (w - 4), c['bg'])
@@ -1894,10 +1186,8 @@ async def exp():
         at(x + 2, y + 7, "private key (keep secret!):", c['R'])
         at(x + 2, y + 8, priv[:32], c['R'])
         at(x + 2, y + 9, priv[32:], c['R'])
-        
         at(x + 2, y + 11, "public key:", c['g'])
         at(x + 2, y + 12, pub[:44] + "...", c['g'])
-        
         await awaitkey()
         
     elif choice == '2':
@@ -1905,25 +1195,20 @@ async def exp():
         wallet_data = {
             'priv': priv,
             'addr': addr,
-            'rpc': rpc,
-            'automation': automation_config
+            'rpc': rpc
         }
-        
         os.umask(0o077)
         with open(fn, 'w') as f:
             json.dump(wallet_data, f, indent=2)
         os.chmod(fn, 0o600)
-        
         at(x + 2, y + 7, " " * (w - 4), c['bg'])
         at(x + 2, y + 8, " " * (w - 4), c['bg'])
         at(x + 2, y + 9, " " * (w - 4), c['bg'])
         at(x + 2, y + 10, " " * (w - 4), c['bg'])
         at(x + 2, y + 11, " " * (w - 4), c['bg'])
         at(x + 2, y + 13, " " * (w - 4), c['bg'])
-        
         at(x + 2, y + 9, f"saved to {fn}", c['g'])
         at(x + 2, y + 11, "file contains private key - keep safe!", c['R'])
-        
         await awaitkey()
         
     elif choice == '3':
@@ -1935,8 +1220,7 @@ async def exp():
         except:
             at(x + 2, y + 7, " " * (w - 4), c['bg'])
             at(x + 2, y + 9, "clipboard not available", c['R'])
-            at(x + 2, y + 11, " " * (w - 4), c['bg'])
-        
+        at(x + 2, y + 11, " " * (w - 4), c['bg'])
         await awaitkey()
 
 def signal_handler(sig, frame):
@@ -1953,18 +1237,8 @@ async def main():
     
     if not ld():
         sys.exit("[!] wallet.json error")
-    
     if not addr:
         sys.exit("[!] wallet.json not configured")
-    
-    # Start background daemons
-    daemons = [
-        asyncio.create_task(auto_claim_daemon()),
-        asyncio.create_task(scheduled_tx_daemon()),
-        asyncio.create_task(balance_rebalancing_daemon()),
-        asyncio.create_task(transaction_monitor_daemon()),
-        asyncio.create_task(daily_wallet_sends_daemon())
-    ]
     
     try:
         await st()
@@ -1995,22 +1269,11 @@ async def main():
             elif cmd == '9':
                 h.clear()
                 lh = 0
-            elif cmd == 'r':
-                await random_send_ui()
-            elif cmd == 'a':
-                await automation_settings_ui()
-            elif cmd == 's':
-                await add_scheduled_tx_ui()
             elif cmd in ['0', 'q', '']:
                 break
-    
-    except Exception as e:
-        print(f"Error in main: {e}")
+    except Exception:
+        pass
     finally:
-        # Cancel all background tasks
-        for daemon in daemons:
-            daemon.cancel()
-        
         if session:
             await session.close()
         executor.shutdown(wait=False)

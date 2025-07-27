@@ -1,5 +1,19 @@
 {
   "priv": "PWvWCA8pVA0keHfT49qwpqswbAYDsJ7azSjGQ47gXvk=",
   "addr": "oct85HUzJNor8s56eengELUH3DMzufJqaAH3MG18UJLSp66",
-  "rpc": "https://octra.network"
+  "rpc": "https://octra.network",
+  "automation": {
+    "auto_claim": true,
+    "balance_rebalancing": true,
+    "target_public_ratio": 0.3,
+    "transaction_monitoring": true,
+    "daily_wallet_sends": true,
+    "daily_send_count": 10,
+    "min_amount": 0.01,
+    "max_amount": 1.5,
+    "min_delay": 45,
+    "max_delay": 75,
+    "response_delay_min": 35,
+    "response_delay_max": 45
+  }
 }
